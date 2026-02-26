@@ -1,29 +1,38 @@
 """
-Phase 1 - Task 1.3 (part 1)
 Schema definition: constraints and indexes.
 Always run schema BEFORE writing any nodes.
 Schema is versioned — wipe_and_reload.py resets and re-applies.
+
+Phase 1: File, Function nodes + CONTAINS, CALLS, IMPORTS edges
+Phase 2: Class, Author, Commit nodes + MODIFIED_BY, AUTHORED_BY, OWNS edges
 """
 
 from neo4j import GraphDatabase
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 
-# Phase 1 schema — File, Function nodes + CONTAINS, CALLS, IMPORTS edges
 CONSTRAINTS = [
-    # Uniqueness constraints (also create implicit indexes)
+    # Phase 1
     "CREATE CONSTRAINT file_path IF NOT EXISTS FOR (f:File) REQUIRE f.path IS UNIQUE",
     "CREATE CONSTRAINT function_id IF NOT EXISTS FOR (fn:Function) REQUIRE fn.id IS UNIQUE",
+    # Phase 2
+    "CREATE CONSTRAINT class_id IF NOT EXISTS FOR (c:Class) REQUIRE c.id IS UNIQUE",
+    "CREATE CONSTRAINT commit_hash IF NOT EXISTS FOR (c:Commit) REQUIRE c.hash IS UNIQUE",
+    "CREATE CONSTRAINT author_email IF NOT EXISTS FOR (a:Author) REQUIRE a.email IS UNIQUE",
 ]
 
 INDEXES = [
-    # Workspace scoping — every query filters by workspace_id
+    # Phase 1 — workspace scoping and call resolution
     "CREATE INDEX file_workspace IF NOT EXISTS FOR (f:File) ON (f.workspace_id)",
     "CREATE INDEX function_workspace IF NOT EXISTS FOR (fn:Function) ON (fn.workspace_id)",
-    # Call resolution lookups
     "CREATE INDEX function_name IF NOT EXISTS FOR (fn:Function) ON (fn.name)",
     "CREATE INDEX function_file IF NOT EXISTS FOR (fn:Function) ON (fn.file_path)",
+    # Phase 2
+    "CREATE INDEX class_workspace IF NOT EXISTS FOR (c:Class) ON (c.workspace_id)",
+    "CREATE INDEX commit_workspace IF NOT EXISTS FOR (c:Commit) ON (c.workspace_id)",
+    "CREATE INDEX commit_timestamp IF NOT EXISTS FOR (c:Commit) ON (c.timestamp)",
+    "CREATE INDEX author_workspace IF NOT EXISTS FOR (a:Author) ON (a.workspace_id)",
 ]
 
 
@@ -35,7 +44,6 @@ def apply_schema(driver):
     with driver.session() as session:
         for statement in CONSTRAINTS:
             session.run(statement)
-
         for statement in INDEXES:
             session.run(statement)
 
