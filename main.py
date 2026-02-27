@@ -256,5 +256,15 @@ def history(file_path):
     driver.close()
 
 
+
+@cli.command()
+@click.option("--workspace-id", default="local_dev", help="Workspace to enrich")
+@click.option("--force", is_flag=True, help="Re-enrich all nodes, not just unenriched")
+@click.option("--dry-run", is_flag=True, help="Show cost estimate without making API calls")
+def enrich(workspace_id, force, dry_run):
+    """Phase 5 — Add semantic labels to all Function nodes using GPT-4o."""
+    from enrichment.enrich import enrich_workspace
+    enrich_workspace(workspace_id, force=force, dry_run=dry_run)
+
 if __name__ == "__main__":
     cli()
