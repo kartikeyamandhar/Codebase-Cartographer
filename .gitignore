@@ -25,4 +25,4 @@ neo4j_data/
 
 # Temp files
 *.log
-*.tmp
+*.tmpnode_modules/
