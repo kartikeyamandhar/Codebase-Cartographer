@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 
 from graph.schema import get_driver, verify_connection
-from chat.tools import TOOL_DEFINITIONS, dispatch_tool
+from chat.tools import TOOL_DEFINITIONS, dispatch_tool, get_node_detail, read_file
 from chat.schema_prompt import SYSTEM_PROMPT
 
 app = FastAPI(title="Codebase Cartographer", version="0.3.0")
@@ -199,3 +199,121 @@ def chat(request: ChatRequest):
 @app.get("/schema")
 def schema():
     return {"schema": SYSTEM_PROMPT}
+
+
+# ── Graph data endpoint for frontend ─────────────────────────────────────────
+
+@app.get("/graph/{workspace_id}")
+def get_graph(workspace_id: str, limit: int = 150):
+    """
+    Return Cytoscape.js-compatible graph JSON.
+    Default: top-150 nodes by degree to avoid browser freeze.
+    """
+    driver = get_neo4j()
+    try:
+        with driver.session() as session:
+            # Get top nodes by degree
+            node_result = session.run("""
+                MATCH (n {workspace_id: $wid})
+                WHERE n:File OR n:Function OR n:Class OR n:Author
+                WITH n,
+                     size([(n)-[]-() | 1]) AS degree
+                ORDER BY degree DESC
+                LIMIT $limit
+                RETURN
+                    COALESCE(n.path, n.id, n.email, n.name) AS node_id,
+                    labels(n)[0] AS type,
+                    COALESCE(
+                        n.path, n.name, n.email, n.id
+                    ) AS label,
+                    n.domain_tag AS domain_tag,
+                    degree
+            """, wid=workspace_id, limit=limit)
+
+            nodes = []
+            node_ids = set()
+            for r in node_result:
+                nid = r["node_id"]
+                if nid and nid not in node_ids:
+                    node_ids.add(nid)
+                    lbl = r["label"] or nid
+                    # Shorten label to last path component
+                    short_label = lbl.split('/')[-1] if '/' in lbl else lbl
+                    nodes.append({
+                        "data": {
+                            "id": nid,
+                            "label": short_label,
+                            "type": r["type"],
+                            "domain_tag": r["domain_tag"] or "",
+                            "degree": r["degree"] or 1,
+                        }
+                    })
+
+            # Get edges between visible nodes only
+            edge_result = session.run("""
+                MATCH (n {workspace_id: $wid})-[r]->(m {workspace_id: $wid})
+                WHERE COALESCE(n.path, n.id, n.email, n.name) IN $node_ids
+                  AND COALESCE(m.path, m.id, m.email, m.name) IN $node_ids
+                  AND type(r) IN ['IMPORTS', 'CALLS', 'OWNS']
+                RETURN
+                    COALESCE(n.path, n.id, n.email, n.name) AS source,
+                    COALESCE(m.path, m.id, m.email, m.name) AS target,
+                    type(r) AS rel_type,
+                    r.resolved AS resolved
+                LIMIT 800
+            """, wid=workspace_id, node_ids=list(node_ids))
+
+            edges = []
+            seen_edges = set()
+            for i, r in enumerate(edge_result):
+                src, tgt = r["source"], r["target"]
+                if not src or not tgt:
+                    continue
+                key = f"{src}→{tgt}→{r['rel_type']}"
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                edges.append({
+                    "data": {
+                        "id": f"e{i}",
+                        "source": src,
+                        "target": tgt,
+                        "type": r["rel_type"],
+                        "resolved": r["resolved"],
+                    }
+                })
+
+        return {"nodes": nodes, "edges": edges, "workspace_id": workspace_id}
+    finally:
+        driver.close()
+
+
+@app.get("/node/{node_id:path}")
+def get_node(node_id: str, workspace_id: str = "local_dev", node_type: str = "File"):
+    """Get full details for a single node."""
+    driver = get_neo4j()
+    try:
+        result = get_node_detail(node_id, node_type, workspace_id, driver)
+        return result
+    finally:
+        driver.close()
+
+
+@app.get("/workspaces")
+def list_workspaces():
+    """Return all workspace_ids that have data in the graph."""
+    driver = get_neo4j()
+    try:
+        with driver.session() as session:
+            result = session.run(
+                "MATCH (n) WHERE n.workspace_id IS NOT NULL "
+                "RETURN DISTINCT n.workspace_id AS wid, "
+                "count(n) AS node_count ORDER BY node_count DESC"
+            )
+            workspaces = [
+                {"workspace_id": r["wid"], "node_count": r["node_count"]}
+                for r in result
+            ]
+        return {"workspaces": workspaces}
+    finally:
+        driver.close()

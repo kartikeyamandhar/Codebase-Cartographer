@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "cytoscape": "^3.33.1"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10"
+  }
+}

@@ -22,6 +22,33 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "read_file",
+            "description": (
+                "Read the actual source code of a file from disk. "
+                "Use this when the user asks to explain, describe, or understand what code does. "
+                "Also use this when query_graph returns structural info but the user wants to understand the code itself."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The full file path as stored in the graph (e.g. repos/requests/src/requests/auth.py)"
+                    },
+                    "workspace_id": {"type": "string"},
+                    "max_lines": {
+                        "type": "integer",
+                        "description": "Max lines to return. Default 150. Use 300 for large files.",
+                        "default": 150
+                    }
+                },
+                "required": ["file_path", "workspace_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_graph",
             "description": (
                 "Execute a Cypher query against the Neo4j codebase graph. "
@@ -287,6 +314,51 @@ def summarize_subgraph(nodes: list, edges: list, question: str) -> dict:
     }
 
 
+
+def read_file(file_path: str, workspace_id: str, max_lines: int = 150, driver=None) -> dict:
+    """Read actual source code from disk. Searches common repo locations."""
+    import os
+    import glob
+
+    # Try the path directly first
+    candidates = [
+        file_path,
+        os.path.join("repos", file_path),
+        os.path.join(os.getcwd(), file_path),
+        os.path.join(os.getcwd(), "repos", file_path),
+    ]
+
+    # Also try glob search by filename
+    filename = os.path.basename(file_path)
+    glob_results = glob.glob(f"repos/**/{filename}", recursive=True)
+    glob_results += glob.glob(f"**/{filename}", recursive=True)
+    candidates += glob_results
+
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+                total = len(lines)
+                truncated = total > max_lines
+                code = ''.join(lines[:max_lines])
+                return {
+                    "success": True,
+                    "file_path": path,
+                    "total_lines": total,
+                    "lines_returned": min(max_lines, total),
+                    "truncated": truncated,
+                    "code": code,
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e), "file_path": path}
+
+    return {
+        "success": False,
+        "error": f"File not found: {file_path}",
+        "searched": candidates[:4],
+    }
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 def dispatch_tool(tool_name: str, tool_args: dict, driver) -> dict:
@@ -301,6 +373,13 @@ def dispatch_tool(tool_name: str, tool_args: dict, driver) -> dict:
         return get_node_detail(
             tool_args["node_id"], tool_args["node_type"],
             tool_args["workspace_id"], driver
+        )
+    elif tool_name == "read_file":
+        return read_file(
+            tool_args["file_path"],
+            tool_args.get("workspace_id", ""),
+            tool_args.get("max_lines", 150),
+            driver
         )
     elif tool_name == "summarize_subgraph":
         return summarize_subgraph(
