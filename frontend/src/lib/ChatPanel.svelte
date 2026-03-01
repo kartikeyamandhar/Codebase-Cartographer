@@ -41,7 +41,16 @@
         cypher: data.cypher_used,
         tools: data.tools_called,
         latency: data.latency_ms,
+        highlight: data.highlight_node_ids || [],
+        hasMermaid: !!(data.mermaid),
       }];
+
+      if (data.highlight_node_ids?.length) {
+        dispatch('highlight', data.highlight_node_ids);
+      }
+      if (data.mermaid) {
+        dispatch('mermaid', data.mermaid);
+      }
     } catch(e) {
       messages = [...messages, { role: 'assistant', content: `Error: ${e.message}`, error: true }];
     }
@@ -102,6 +111,12 @@
       <div class="message {msg.role}" class:error={msg.error}>
         <div class="msg-role mono">{msg.role === 'user' ? 'you' : 'ai'}</div>
         <div class="msg-content">{msg.content}</div>
+        {#if msg.hasMermaid}
+          <div class="diagram-note">↗ Diagram rendered in graph view</div>
+        {/if}
+        {#if msg.highlight?.length}
+          <div class="highlight-note">↗ {msg.highlight.length} node{msg.highlight.length > 1 ? 's' : ''} highlighted in graph</div>
+        {/if}
         {#if msg.tools?.length}
           <div class="msg-meta mono">
             {msg.tools.join(' → ')} · {msg.latency}ms
@@ -238,6 +253,18 @@
   word-break: break-word;
 }
 
+.diagram-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--warn);
+  margin-top: 4px;
+}
+.highlight-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 2px;
+}
 .msg-meta {
   font-size: 10px;
   color: var(--text-2);

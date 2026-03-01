@@ -96,8 +96,11 @@ def cli():
 @click.option("--no-git", is_flag=True, default=False, help="Skip git history parsing")
 @click.option("--incremental", is_flag=True, default=False,
               help="Only re-process files whose content hash changed")
-def ingest(github_url, repo_dir, no_git, incremental):
+@click.option("--workspace-id", default=None, help="Override workspace ID (default: derived from WORKSPACE_ID env or repo name)")
+def ingest(github_url, repo_dir, no_git, incremental, workspace_id):
     """Clone a repo, parse it, and write the graph to Neo4j."""
+    if workspace_id:
+        os.environ["WORKSPACE_ID"] = workspace_id
     driver, workspace_id = get_neo4j_driver()
     apply_schema(driver)
 

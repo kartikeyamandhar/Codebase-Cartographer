@@ -4,8 +4,10 @@ Orchestrator: FastAPI + GPT-4o tool calling.
 Fix: inject workspace_id into every tool call automatically.
 """
 
+import asyncio
 import json
 import os
+import sys
 import time
 from typing import Optional
 
@@ -14,6 +16,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
 
@@ -317,3 +320,90 @@ def list_workspaces():
         return {"workspaces": workspaces}
     finally:
         driver.close()
+
+
+# ── SSE Ingestion endpoint ─────────────────────────────────────────────────
+
+class IngestRequest(BaseModel):
+    github_url: str
+    workspace_id: Optional[str] = None
+
+
+@app.post("/ingest/stream")
+async def ingest_stream(request: IngestRequest):
+    """
+    SSE endpoint. Streams ingestion progress to the browser.
+    Stages: cloning → parsing → building → enriching → ready
+    """
+    github_url = request.github_url
+    workspace_id = request.workspace_id or github_url.rstrip('/').split('/')[-1].lower()
+
+    async def event_stream():
+        def sse(stage: str, msg: str, pct: int = 0):
+            data = json.dumps({"stage": stage, "message": msg, "percent": pct})
+            return f"data: {data}\n\n"
+
+        yield sse("cloning", f"Cloning {github_url}...", 5)
+        await asyncio.sleep(0.1)
+
+        try:
+            env = os.environ.copy()
+            env["WORKSPACE_ID"] = workspace_id
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "main.py", "ingest", github_url,
+                "--workspace-id", workspace_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+
+            stage_map = {
+                "cloning":  ("cloning",   10),
+                "parsing":  ("parsing",   35),
+                "building": ("building",  60),
+                "writing":  ("building",  65),
+                "git":      ("building",  70),
+                "commit":   ("building",  75),
+                "complete": ("ready",    100),
+                "error":    ("error",      0),
+            }
+
+            async for line in proc.stdout:
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                stage, pct = "processing", 50
+                for kw, (s, p) in stage_map.items():
+                    if kw in text.lower():
+                        stage, pct = s, p
+                        break
+                yield sse(stage, text[:120], pct)
+
+            await proc.wait()
+
+            if proc.returncode == 0:
+                yield sse("enriching", "Running semantic enrichment...", 85)
+                enrich_proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "main.py", "enrich",
+                    "--workspace-id", workspace_id,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                )
+                async for line in enrich_proc.stdout:
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if text:
+                        yield sse("enriching", text[:120], 90)
+                await enrich_proc.wait()
+                yield sse("ready", f"Workspace '{workspace_id}' is ready", 100)
+            else:
+                yield sse("error", "Ingestion failed — check server logs", 0)
+
+        except Exception as e:
+            yield sse("error", str(e)[:200], 0)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
